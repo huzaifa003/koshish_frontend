@@ -23,6 +23,8 @@ export interface Donation {
   receivedOn: string;
   amount: number;
   donorName: string;
+  donorPhone?: string;
+  whatsappOptIn?: boolean;
   isNamePublic: boolean;
   source: string;
   method: string;
@@ -64,6 +66,7 @@ export interface SiteSettings {
   id: string;
   donationUrl: string;
   instagramUrl: string;
+  whatsappGroupUrl?: string;
   tagline: string;
   updatedAt: string;
 }
@@ -75,7 +78,15 @@ export interface TeamMember {
   createdAt: string;
 }
 
+export interface ProjectFinance {
+  projectId: string | null;
+  raised: number;
+  spent: number;
+  donations: number;
+}
+
 export interface PortalData {
+  finances: ProjectFinance[];
   projects: Project[];
   donations: Donation[];
   expenses: Expense[];
@@ -87,5 +98,8 @@ export interface PortalData {
 export type ProjectInput = Omit<Project, "id" | "createdAt">;
 export type DonationInput = Omit<Donation, "id" | "createdAt">;
 export type ExpenseInput = Omit<Expense, "id" | "createdAt">;
-export type EvidenceInput = Omit<EvidenceItem, "id" | "createdAt" | "url" | "storagePath" | "bucket" | "mimeType"> & { file: File };
+export type EvidenceInput = Omit<
+  EvidenceItem,
+  "id" | "createdAt" | "url" | "storagePath" | "bucket" | "mimeType"
+> & { file: File };
 export type SettingsInput = Omit<SiteSettings, "id" | "updatedAt">;

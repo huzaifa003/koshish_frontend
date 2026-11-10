@@ -1,8 +1,31 @@
+"use client";
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { normalizeWhatsAppPhone, isWhatsAppGroupUrl } from "@/lib/whatsapp";
 import { demoData } from "@/data/demo";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { Donation, DonationInput, EvidenceInput, EvidenceItem, Expense, ExpenseInput, PortalData, Project, ProjectInput, Role, SettingsInput, SiteSettings, TeamMember } from "@/types";
+import type {
+  Donation,
+  DonationInput,
+  EvidenceInput,
+  EvidenceItem,
+  Expense,
+  ExpenseInput,
+  PortalData,
+  Project,
+  ProjectInput,
+  Role,
+  SettingsInput,
+  SiteSettings,
+  TeamMember,
+} from "@/types";
 
 type User = { id: string; email: string } | null;
 type RecordKind = "projects" | "donations" | "expenses";
@@ -11,6 +34,7 @@ interface PortalContextValue {
   data: PortalData;
   mode: "demo" | "live";
   loading: boolean;
+  loadError: string | null;
   user: User;
   role: Role | null;
   loginDemo: () => void;
@@ -24,87 +48,216 @@ interface PortalContextValue {
   uploadEvidence: (input: EvidenceInput) => Promise<void>;
   deleteEvidence: (item: EvidenceItem) => Promise<void>;
   saveSettings: (input: SettingsInput) => Promise<void>;
-  saveTeamMember: (member: Pick<TeamMember, "userId" | "email" | "role">) => Promise<void>;
+  saveTeamMember: (
+    member: Pick<TeamMember, "userId" | "email" | "role">,
+  ) => Promise<void>;
   removeTeamMember: (userId: string) => Promise<void>;
 }
 
 const PortalContext = createContext<PortalContextValue | null>(null);
 const now = () => new Date().toISOString();
 const cloneDemo = () => structuredClone(demoData);
+// Cursor pagination avoids Supabase’s default 1,000-row response cap.
+async function readTransactions(table: "donations" | "expenses") {
+  const rows: Record<string, unknown>[] = [];
+  let cursor: string | null = null;
+  while (true) {
+    let query = supabase!.from(table).select("*").order("id").limit(500);
+    if (cursor) query = query.gt("id", cursor);
+    const { data: page, error } = await query;
+    if (error) return { data: [], error };
+    rows.push(...(page ?? []));
+    if (!page || page.length < 500) break;
+    cursor = String(page[page.length - 1].id);
+  }
+  return { data: rows, error: null };
+}
 
 const mapProject = (row: Record<string, unknown>): Project => ({
-  id: String(row.id), slug: String(row.slug), title: String(row.title), category: String(row.category),
-  status: row.status as Project["status"], location: String(row.location), startedOn: String(row.started_on),
-  summary: String(row.summary), description: String(row.description), goalAmount: Number(row.goal_amount),
-  beneficiaries: Number(row.beneficiaries), art: row.art as Project["art"], createdAt: String(row.created_at),
+  id: String(row.id),
+  slug: String(row.slug),
+  title: String(row.title),
+  category: String(row.category),
+  status: row.status as Project["status"],
+  location: String(row.location),
+  startedOn: String(row.started_on),
+  summary: String(row.summary),
+  description: String(row.description),
+  goalAmount: Number(row.goal_amount),
+  beneficiaries: Number(row.beneficiaries),
+  art: row.art as Project["art"],
+  createdAt: String(row.created_at),
 });
 const mapDonation = (row: Record<string, unknown>): Donation => ({
-  id: String(row.id), receivedOn: String(row.received_on), amount: Number(row.amount), donorName: String(row.donor_name ?? ""),
-  isNamePublic: Boolean(row.is_name_public), source: String(row.source), method: String(row.method),
-  projectId: row.project_id ? String(row.project_id) : null, reference: String(row.reference ?? ""),
-  verified: Boolean(row.verified), createdAt: String(row.created_at),
+  id: String(row.id),
+  receivedOn: String(row.received_on),
+  amount: Number(row.amount),
+  donorName: String(row.donor_name ?? ""),
+  donorPhone: String(row.donor_phone ?? ""),
+  whatsappOptIn: Boolean(row.whatsapp_opt_in),
+  isNamePublic: Boolean(row.is_name_public),
+  source: String(row.source),
+  method: String(row.method),
+  projectId: row.project_id ? String(row.project_id) : null,
+  reference: String(row.reference ?? ""),
+  verified: Boolean(row.verified),
+  createdAt: String(row.created_at),
 });
 const mapExpense = (row: Record<string, unknown>): Expense => ({
-  id: String(row.id), spentOn: String(row.spent_on), amount: Number(row.amount), category: String(row.category),
-  vendor: String(row.vendor), description: String(row.description), projectId: row.project_id ? String(row.project_id) : null,
-  reference: String(row.reference ?? ""), verified: Boolean(row.verified), createdAt: String(row.created_at),
+  id: String(row.id),
+  spentOn: String(row.spent_on),
+  amount: Number(row.amount),
+  category: String(row.category),
+  vendor: String(row.vendor),
+  description: String(row.description),
+  projectId: row.project_id ? String(row.project_id) : null,
+  reference: String(row.reference ?? ""),
+  verified: Boolean(row.verified),
+  createdAt: String(row.created_at),
 });
 const mapEvidence = (row: Record<string, unknown>): EvidenceItem => ({
-  id: String(row.id), projectId: String(row.project_id), expenseId: row.expense_id ? String(row.expense_id) : null,
-  title: String(row.title), description: String(row.description ?? ""), url: String(row.public_url ?? ""),
-  storagePath: row.storage_path ? String(row.storage_path) : null, bucket: row.bucket ? String(row.bucket) : null,
-  mimeType: String(row.mime_type), visibility: row.visibility as EvidenceItem["visibility"], capturedOn: String(row.captured_on), createdAt: String(row.created_at),
+  id: String(row.id),
+  projectId: String(row.project_id),
+  expenseId: row.expense_id ? String(row.expense_id) : null,
+  title: String(row.title),
+  description: String(row.description ?? ""),
+  url: String(row.public_url ?? ""),
+  storagePath: row.storage_path ? String(row.storage_path) : null,
+  bucket: row.bucket ? String(row.bucket) : null,
+  mimeType: String(row.mime_type),
+  visibility: row.visibility as EvidenceItem["visibility"],
+  capturedOn: String(row.captured_on),
+  createdAt: String(row.created_at),
 });
 const mapSettings = (row: Record<string, unknown>): SiteSettings => ({
-  id: String(row.id), donationUrl: String(row.donation_url), instagramUrl: String(row.instagram_url),
-  tagline: String(row.tagline), updatedAt: String(row.updated_at),
+  id: String(row.id),
+  donationUrl: String(row.donation_url),
+  instagramUrl: String(row.instagram_url),
+  whatsappGroupUrl: String(row.whatsapp_group_url ?? ""),
+  tagline: String(row.tagline),
+  updatedAt: String(row.updated_at),
 });
 
 export function PortalProvider({ children }: { children: ReactNode }) {
   const mode = isSupabaseConfigured ? "live" : "demo";
-  const [data, setData] = useState<PortalData>(() => mode === "demo" ? cloneDemo() : { ...cloneDemo(), projects: [], donations: [], expenses: [], evidence: [], team: [] });
+  const [data, setData] = useState<PortalData>(() =>
+    mode === "demo"
+      ? cloneDemo()
+      : {
+          ...cloneDemo(),
+          projects: [],
+          donations: [],
+          expenses: [],
+          evidence: [],
+          team: [],
+          finances: [],
+        },
+  );
   const [loading, setLoading] = useState(mode === "live");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [user, setUser] = useState<User>(null);
   const [role, setRole] = useState<Role | null>(null);
 
   const refreshData = useCallback(async () => {
     if (!supabase) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       let hasTeamAccess = false;
       if (sessionData.session) {
-        const roleResult = await supabase.from("user_roles").select("role").eq("user_id", sessionData.session.user.id).maybeSingle();
-        hasTeamAccess = roleResult.data?.role === "admin" || roleResult.data?.role === "editor";
+        const roleResult = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", sessionData.session.user.id)
+          .maybeSingle();
+        hasTeamAccess = roleResult.data?.role === "admin";
       }
-      const [projects, donations, expenses, evidence, settings] = await Promise.all([
-        supabase.from("projects").select("*").order("started_on", { ascending: false }),
-        supabase.from(hasTeamAccess ? "donations" : "public_donations").select("*").order("received_on", { ascending: false }),
-        supabase.from("expenses").select("*").order("spent_on", { ascending: false }),
-        supabase.from("evidence").select("*").order("captured_on", { ascending: false }),
-        supabase.from("site_settings").select("*").eq("id", "main").maybeSingle(),
-      ]);
-      const failure = [projects, donations, expenses, evidence, settings].find((result) => result.error);
+      const [projects, donations, expenses, evidence, settings, finances] =
+        await Promise.all([
+          supabase
+            .from("projects")
+            .select("*")
+            .order("started_on", { ascending: false }),
+          hasTeamAccess
+            ? readTransactions("donations")
+            : Promise.resolve({ data: [], error: null }),
+          hasTeamAccess
+            ? readTransactions("expenses")
+            : Promise.resolve({ data: [], error: null }),
+          supabase
+            .from("evidence")
+            .select("*")
+            .order("captured_on", { ascending: false }),
+          supabase
+            .from("site_settings")
+            .select("*")
+            .eq("id", "main")
+            .maybeSingle(),
+          supabase.rpc("public_project_finances"),
+        ]);
+      const failure = [
+        projects,
+        donations,
+        expenses,
+        evidence,
+        settings,
+        finances,
+      ].find((result) => result.error);
       if (failure?.error) throw failure.error;
       let team: TeamMember[] = [];
       if (hasTeamAccess) {
-        const teamResult = await supabase.from("user_roles").select("*").order("created_at", { ascending: true });
+        const teamResult = await supabase
+          .from("user_roles")
+          .select("*")
+          .order("created_at", { ascending: true });
         if (teamResult.error) throw teamResult.error;
-        team = (teamResult.data ?? []).map((row) => ({ userId: String(row.user_id), email: row.email ? String(row.email) : null, role: row.role as Role, createdAt: String(row.created_at) }));
+        team = (teamResult.data ?? []).map((row) => ({
+          userId: String(row.user_id),
+          email: row.email ? String(row.email) : null,
+          role: row.role as Role,
+          createdAt: String(row.created_at),
+        }));
       }
-      const evidenceRows = await Promise.all((evidence.data ?? []).map(async (row) => {
-        if (row.bucket === "internal-evidence" && row.storage_path && sessionData.session) {
-          const { data: signed, error: signedError } = await supabase!.storage.from("internal-evidence").createSignedUrl(String(row.storage_path), 3600);
-          if (signedError) throw signedError;
-          return { ...row, public_url: signed?.signedUrl ?? "" };
-        }
-        return row;
-      }));
+      const evidenceRows = await Promise.all(
+        (evidence.data ?? []).map(async (row) => {
+          if (
+            row.bucket === "internal-evidence" &&
+            row.storage_path &&
+            sessionData.session
+          ) {
+            const { data: signed, error: signedError } = await supabase!.storage
+              .from("internal-evidence")
+              .createSignedUrl(String(row.storage_path), 3600);
+            if (signedError) throw signedError;
+            return { ...row, public_url: signed?.signedUrl ?? "" };
+          }
+          return row;
+        }),
+      );
       setData({
-        projects: (projects.data ?? []).map(mapProject), donations: (donations.data ?? []).map(mapDonation),
-        expenses: (expenses.data ?? []).map(mapExpense), evidence: evidenceRows.map(mapEvidence),
-        settings: settings.data ? mapSettings(settings.data) : cloneDemo().settings, team,
+        finances: (finances.data ?? []).map((row: Record<string, unknown>) => ({
+          projectId: row.project_id ? String(row.project_id) : null,
+          raised: Number(row.raised),
+          spent: Number(row.spent),
+          donations: Number(row.donation_count),
+        })),
+        projects: (projects.data ?? []).map(mapProject),
+        donations: (donations.data ?? []).map(mapDonation),
+        expenses: (expenses.data ?? []).map(mapExpense),
+        evidence: evidenceRows.map(mapEvidence),
+        settings: settings.data
+          ? mapSettings(settings.data)
+          : cloneDemo().settings,
+        team,
       });
+    } catch (error) {
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load live records. Please try again.",
+      );
+      throw error;
     } finally {
       setLoading(false);
     }
@@ -112,21 +265,53 @@ export function PortalProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!supabase) return;
-    void refreshData().catch((error) => console.error("Unable to load portal data", error));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      const nextUser = session?.user ? { id: session.user.id, email: session.user.email ?? "Team member" } : null;
-      setUser(nextUser);
-      if (!nextUser) {
-        setRole(null);
-        void refreshData().catch((error) => console.error("Unable to refresh public data", error));
-        return;
-      }
-      void supabase!.from("user_roles").select("role").eq("user_id", nextUser.id).maybeSingle().then(({ data: roleRow, error }) => {
-        if (error) console.error("Unable to verify team role", error);
-        setRole(roleRow?.role === "admin" || roleRow?.role === "editor" ? roleRow.role : null);
-        void refreshData().catch((refreshError) => console.error("Unable to refresh team data", refreshError));
-      });
-    });
+    void refreshData().catch((error) =>
+      console.error("Unable to load portal data", error),
+    );
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        const nextUser = session?.user
+          ? { id: session.user.id, email: session.user.email ?? "Team member" }
+          : null;
+        setUser(nextUser);
+        if (!nextUser) {
+          setRole(null);
+          setData((current) => ({
+            ...current,
+            donations: [],
+            expenses: [],
+            team: [],
+            evidence: current.evidence.filter(
+              (item) => item.visibility === "public",
+            ),
+          }));
+          setTimeout(() => {
+            void refreshData().catch((error) =>
+              console.error("Unable to refresh public data", error),
+            );
+          }, 0);
+          return;
+        }
+        setTimeout(() => {
+          void supabase!
+            .from("user_roles")
+            .select("role")
+            .eq("user_id", nextUser.id)
+            .maybeSingle()
+            .then(({ data: roleRow, error }) => {
+              if (error) console.error("Unable to verify team role", error);
+              setRole(
+                roleRow?.role === "admin" || roleRow?.role === "editor"
+                  ? roleRow.role
+                  : null,
+              );
+              void refreshData().catch((refreshError) =>
+                console.error("Unable to refresh team data", refreshError),
+              );
+            });
+        }, 0);
+      },
+    );
     return () => listener.subscription.unsubscribe();
   }, [refreshData]);
 
@@ -137,10 +322,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     if (!supabase) {
-      if (email === "admin@koshish.demo" && password === "koshish-demo") return loginDemo();
-      throw new Error("Use the demo access button, or connect Supabase for your real team login.");
+      if (email === "admin@koshish.demo" && password === "koshish-demo")
+        return loginDemo();
+      throw new Error(
+        "Use the demo access button, or connect Supabase for your real team login.",
+      );
     }
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
     if (error) throw error;
   };
 
@@ -154,53 +345,161 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   };
 
   const requireRole = () => {
-    if (!role) throw new Error("Your account does not have internal portal access.");
+    if (!role)
+      throw new Error("Your account does not have internal portal access.");
     return role;
   };
 
   const saveProject = async (input: ProjectInput, id?: string) => {
     requireRole();
     if (!supabase) {
-      setData((current) => ({ ...current, projects: id ? current.projects.map((item) => item.id === id ? { ...input, id, createdAt: item.createdAt } : item) : [{ ...input, id: crypto.randomUUID(), createdAt: now() }, ...current.projects] }));
+      setData((current) => ({
+        ...current,
+        projects: id
+          ? current.projects.map((item) =>
+              item.id === id
+                ? { ...input, id, createdAt: item.createdAt }
+                : item,
+            )
+          : [
+              { ...input, id: crypto.randomUUID(), createdAt: now() },
+              ...current.projects,
+            ],
+      }));
       return;
     }
-    const row = { slug: input.slug, title: input.title, category: input.category, status: input.status, location: input.location, started_on: input.startedOn, summary: input.summary, description: input.description, goal_amount: input.goalAmount, beneficiaries: input.beneficiaries, art: input.art, updated_at: now() };
-    const query = id ? supabase.from("projects").update(row).eq("id", id) : supabase.from("projects").insert({ ...row, created_by: user?.id });
+    const row = {
+      slug: input.slug,
+      title: input.title,
+      category: input.category,
+      status: input.status,
+      location: input.location,
+      started_on: input.startedOn,
+      summary: input.summary,
+      description: input.description,
+      goal_amount: input.goalAmount,
+      beneficiaries: input.beneficiaries,
+      art: input.art,
+      updated_at: now(),
+    };
+    const query = id
+      ? supabase.from("projects").update(row).eq("id", id)
+      : supabase.from("projects").insert({ ...row, created_by: user?.id });
     const { error } = await query;
     if (error) throw error;
     await refreshData();
   };
 
   const saveDonation = async (input: DonationInput, id?: string) => {
-    requireRole();
+    const phone = input.donorPhone?.trim()
+      ? normalizeWhatsAppPhone(input.donorPhone)
+      : "";
+    if (phone === null)
+      throw new Error("Enter a valid WhatsApp number with its country code.");
+    if (input.whatsappOptIn && !phone)
+      throw new Error(
+        "Add the donor’s WhatsApp number before recording messaging consent.",
+      );
+    input = {
+      ...input,
+      donorPhone: phone,
+      whatsappOptIn: Boolean(input.whatsappOptIn),
+    };
+    if (requireRole() !== "admin")
+      throw new Error("Only admins can manage transactions.");
     if (!supabase) {
-      setData((current) => ({ ...current, donations: id ? current.donations.map((item) => item.id === id ? { ...input, id, createdAt: item.createdAt } : item) : [{ ...input, id: crypto.randomUUID(), createdAt: now() }, ...current.donations] }));
+      setData((current) => ({
+        ...current,
+        donations: id
+          ? current.donations.map((item) =>
+              item.id === id
+                ? { ...input, id, createdAt: item.createdAt }
+                : item,
+            )
+          : [
+              { ...input, id: crypto.randomUUID(), createdAt: now() },
+              ...current.donations,
+            ],
+      }));
       return;
     }
-    const row = { received_on: input.receivedOn, amount: input.amount, donor_name: input.donorName, is_name_public: input.isNamePublic, source: input.source, method: input.method, project_id: input.projectId, reference: input.reference, verified: input.verified, updated_at: now() };
-    const query = id ? supabase.from("donations").update(row).eq("id", id) : supabase.from("donations").insert({ ...row, created_by: user?.id });
+    const row = {
+      received_on: input.receivedOn,
+      amount: input.amount,
+      donor_name: input.donorName,
+      donor_phone: input.donorPhone,
+      whatsapp_opt_in: input.whatsappOptIn,
+      is_name_public: input.isNamePublic,
+      source: input.source,
+      method: input.method,
+      project_id: input.projectId,
+      reference: input.reference,
+      verified: input.verified,
+      updated_at: now(),
+    };
+    const query = id
+      ? supabase.from("donations").update(row).eq("id", id)
+      : supabase.from("donations").insert({ ...row, created_by: user?.id });
     const { error } = await query;
     if (error) throw error;
     await refreshData();
   };
 
   const saveExpense = async (input: ExpenseInput, id?: string) => {
-    requireRole();
+    if (requireRole() !== "admin")
+      throw new Error("Only admins can manage transactions.");
     if (!supabase) {
-      setData((current) => ({ ...current, expenses: id ? current.expenses.map((item) => item.id === id ? { ...input, id, createdAt: item.createdAt } : item) : [{ ...input, id: crypto.randomUUID(), createdAt: now() }, ...current.expenses] }));
+      setData((current) => ({
+        ...current,
+        expenses: id
+          ? current.expenses.map((item) =>
+              item.id === id
+                ? { ...input, id, createdAt: item.createdAt }
+                : item,
+            )
+          : [
+              { ...input, id: crypto.randomUUID(), createdAt: now() },
+              ...current.expenses,
+            ],
+      }));
       return;
     }
-    const row = { spent_on: input.spentOn, amount: input.amount, category: input.category, vendor: input.vendor, description: input.description, project_id: input.projectId, reference: input.reference, verified: input.verified, updated_at: now() };
-    const query = id ? supabase.from("expenses").update(row).eq("id", id) : supabase.from("expenses").insert({ ...row, created_by: user?.id });
+    const row = {
+      spent_on: input.spentOn,
+      amount: input.amount,
+      category: input.category,
+      vendor: input.vendor,
+      description: input.description,
+      project_id: input.projectId,
+      reference: input.reference,
+      verified: input.verified,
+      updated_at: now(),
+    };
+    const query = id
+      ? supabase.from("expenses").update(row).eq("id", id)
+      : supabase.from("expenses").insert({ ...row, created_by: user?.id });
     const { error } = await query;
     if (error) throw error;
     await refreshData();
   };
 
   const deleteRecord = async (kind: RecordKind, id: string) => {
-    if (requireRole() !== "admin") throw new Error("Only admins can delete records.");
+    if (requireRole() !== "admin")
+      throw new Error("Only admins can delete records.");
     if (!supabase) {
-      setData((current) => ({ ...current, [kind]: current[kind].filter((item) => item.id !== id) }));
+      if (
+        kind === "projects" &&
+        [...data.donations, ...data.expenses].some(
+          (item) => item.projectId === id,
+        )
+      )
+        throw new Error(
+          "Projects with financial records cannot be deleted. Mark the project completed instead.",
+        );
+      setData((current) => ({
+        ...current,
+        [kind]: current[kind].filter((item) => item.id !== id),
+      }));
       return;
     }
     const { error } = await supabase.from(kind).delete().eq("id", id);
@@ -211,20 +510,60 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const uploadEvidence = async (input: EvidenceInput) => {
     requireRole();
     if (!input.file) throw new Error("Choose an image or PDF to upload.");
-    if (input.file.size > 10 * 1024 * 1024) throw new Error("Evidence files must be 10 MB or smaller.");
-    if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(input.file.type)) throw new Error("Use a JPG, PNG, WebP or PDF file.");
+    if (input.file.size > 10 * 1024 * 1024)
+      throw new Error("Evidence files must be 10 MB or smaller.");
+    if (
+      !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(
+        input.file.type,
+      )
+    )
+      throw new Error("Use a JPG, PNG, WebP or PDF file.");
     if (!supabase) {
-      const item: EvidenceItem = { id: crypto.randomUUID(), projectId: input.projectId, expenseId: input.expenseId, title: input.title, description: input.description, visibility: input.visibility, capturedOn: input.capturedOn, url: URL.createObjectURL(input.file), storagePath: null, bucket: null, mimeType: input.file.type, createdAt: now() };
-      setData((current) => ({ ...current, evidence: [item, ...current.evidence] }));
+      const item: EvidenceItem = {
+        id: crypto.randomUUID(),
+        projectId: input.projectId,
+        expenseId: input.expenseId,
+        title: input.title,
+        description: input.description,
+        visibility: input.visibility,
+        capturedOn: input.capturedOn,
+        url: URL.createObjectURL(input.file),
+        storagePath: null,
+        bucket: null,
+        mimeType: input.file.type,
+        createdAt: now(),
+      };
+      setData((current) => ({
+        ...current,
+        evidence: [item, ...current.evidence],
+      }));
       return;
     }
-    const bucket = input.visibility === "public" ? "public-evidence" : "internal-evidence";
+    const bucket =
+      input.visibility === "public" ? "public-evidence" : "internal-evidence";
     const extension = input.file.name.split(".").pop()?.toLowerCase() ?? "bin";
     const storagePath = `${input.projectId}/${crypto.randomUUID()}.${extension}`;
-    const upload = await supabase.storage.from(bucket).upload(storagePath, input.file, { contentType: input.file.type });
+    const upload = await supabase.storage
+      .from(bucket)
+      .upload(storagePath, input.file, { contentType: input.file.type });
     if (upload.error) throw upload.error;
-    const publicUrl = bucket === "public-evidence" ? supabase.storage.from(bucket).getPublicUrl(storagePath).data.publicUrl : null;
-    const { error } = await supabase.from("evidence").insert({ project_id: input.projectId, expense_id: input.expenseId, title: input.title, description: input.description, storage_path: storagePath, bucket, public_url: publicUrl, mime_type: input.file.type, visibility: input.visibility, captured_on: input.capturedOn, uploaded_by: user?.id });
+    const publicUrl =
+      bucket === "public-evidence"
+        ? supabase.storage.from(bucket).getPublicUrl(storagePath).data.publicUrl
+        : null;
+    const { error } = await supabase.from("evidence").insert({
+      project_id: input.projectId,
+      expense_id: input.expenseId,
+      title: input.title,
+      description: input.description,
+      storage_path: storagePath,
+      bucket,
+      public_url: publicUrl,
+      mime_type: input.file.type,
+      visibility: input.visibility,
+      captured_on: input.capturedOn,
+      uploaded_by: user?.id,
+    });
     if (error) {
       await supabase.storage.from(bucket).remove([storagePath]);
       throw error;
@@ -233,57 +572,144 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteEvidence = async (item: EvidenceItem) => {
-    if (requireRole() !== "admin") throw new Error("Only admins can delete evidence.");
+    if (requireRole() !== "admin")
+      throw new Error("Only admins can delete evidence.");
     if (!supabase) {
-      setData((current) => ({ ...current, evidence: current.evidence.filter((entry) => entry.id !== item.id) }));
+      setData((current) => ({
+        ...current,
+        evidence: current.evidence.filter((entry) => entry.id !== item.id),
+      }));
       return;
     }
     if (item.bucket && item.storagePath) {
-      const { error } = await supabase.storage.from(item.bucket).remove([item.storagePath]);
+      const { error } = await supabase.storage
+        .from(item.bucket)
+        .remove([item.storagePath]);
       if (error) throw error;
     }
-    const { error } = await supabase.from("evidence").delete().eq("id", item.id);
+    const { error } = await supabase
+      .from("evidence")
+      .delete()
+      .eq("id", item.id);
     if (error) throw error;
     await refreshData();
   };
 
   const saveSettings = async (input: SettingsInput) => {
-    if (requireRole() !== "admin") throw new Error("Only admins can change portal settings.");
+    if (input.whatsappGroupUrl && !isWhatsAppGroupUrl(input.whatsappGroupUrl))
+      throw new Error(
+        "Use a valid https://chat.whatsapp.com/ group invite link.",
+      );
+    if (requireRole() !== "admin")
+      throw new Error("Only admins can change portal settings.");
     if (!supabase) {
-      setData((current) => ({ ...current, settings: { ...input, id: "main", updatedAt: now() } }));
+      setData((current) => ({
+        ...current,
+        settings: { ...input, id: "main", updatedAt: now() },
+      }));
       return;
     }
-    const { error } = await supabase.from("site_settings").upsert({ id: "main", donation_url: input.donationUrl, instagram_url: input.instagramUrl, tagline: input.tagline, updated_at: now() });
+    const { error } = await supabase.from("site_settings").upsert({
+      id: "main",
+      donation_url: input.donationUrl,
+      instagram_url: input.instagramUrl,
+      whatsapp_group_url: input.whatsappGroupUrl?.trim() ?? "",
+      tagline: input.tagline,
+      updated_at: now(),
+    });
     if (error) throw error;
     await refreshData();
   };
 
-  const saveTeamMember = async (member: Pick<TeamMember, "userId" | "email" | "role">) => {
-    if (requireRole() !== "admin") throw new Error("Only admins can manage the team.");
+  const saveTeamMember = async (
+    member: Pick<TeamMember, "userId" | "email" | "role">,
+  ) => {
+    if (requireRole() !== "admin")
+      throw new Error("Only admins can manage the team.");
     if (!supabase) {
-      setData((current) => ({ ...current, team: [...current.team.filter((item) => item.userId !== member.userId), { ...member, createdAt: now() }] }));
+      setData((current) => ({
+        ...current,
+        team: [
+          ...current.team.filter((item) => item.userId !== member.userId),
+          { ...member, createdAt: now() },
+        ],
+      }));
       return;
     }
-    const { error } = await supabase.from("user_roles").upsert({ user_id: member.userId, email: member.email, role: member.role });
+    const { error } = await supabase.from("user_roles").upsert({
+      user_id: member.userId,
+      email: member.email,
+      role: member.role,
+    });
     if (error) throw error;
     await refreshData();
   };
 
   const removeTeamMember = async (userId: string) => {
-    if (requireRole() !== "admin") throw new Error("Only admins can manage the team.");
-    if (userId === user?.id) throw new Error("You cannot remove your own access while signed in.");
+    if (requireRole() !== "admin")
+      throw new Error("Only admins can manage the team.");
+    if (userId === user?.id)
+      throw new Error("You cannot remove your own access while signed in.");
     if (!supabase) {
-      setData((current) => ({ ...current, team: current.team.filter((item) => item.userId !== userId) }));
+      setData((current) => ({
+        ...current,
+        team: current.team.filter((item) => item.userId !== userId),
+      }));
       return;
     }
-    const { error } = await supabase.from("user_roles").delete().eq("user_id", userId);
+    const { error } = await supabase
+      .from("user_roles")
+      .delete()
+      .eq("user_id", userId);
     if (error) throw error;
     await refreshData();
   };
 
-  const value: PortalContextValue = { data, mode, loading, user, role, loginDemo, signIn, signOut, refreshData, saveProject, saveDonation, saveExpense, deleteRecord, uploadEvidence, deleteEvidence, saveSettings, saveTeamMember, removeTeamMember };
+  const visibleData =
+    mode === "demo"
+      ? {
+          ...data,
+          finances: [...data.projects.map((p) => p.id), null].map(
+            (projectId) => ({
+              projectId,
+              raised: data.donations
+                .filter((d) => d.verified && d.projectId === projectId)
+                .reduce((s, d) => s + d.amount, 0),
+              spent: data.expenses
+                .filter((e) => e.verified && e.projectId === projectId)
+                .reduce((s, e) => s + e.amount, 0),
+              donations: data.donations.filter(
+                (d) => d.verified && d.projectId === projectId,
+              ).length,
+            }),
+          ),
+        }
+      : data;
+  const value: PortalContextValue = {
+    data: visibleData,
+    mode,
+    loading,
+    loadError,
+    user,
+    role,
+    loginDemo,
+    signIn,
+    signOut,
+    refreshData,
+    saveProject,
+    saveDonation,
+    saveExpense,
+    deleteRecord,
+    uploadEvidence,
+    deleteEvidence,
+    saveSettings,
+    saveTeamMember,
+    removeTeamMember,
+  };
 
-  return <PortalContext.Provider value={value}>{children}</PortalContext.Provider>;
+  return (
+    <PortalContext.Provider value={value}>{children}</PortalContext.Provider>
+  );
 }
 
 export const usePortal = () => {

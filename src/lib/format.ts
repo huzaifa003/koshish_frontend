@@ -3,7 +3,7 @@ export const formatPKR = (value: number, compact = false) => {
     if (Math.abs(value) >= 1_000_000) return `PKR ${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 2)}M`;
     if (Math.abs(value) >= 1_000) return `PKR ${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
   }
-  return `PKR ${new Intl.NumberFormat("en-PK", { maximumFractionDigits: 0 }).format(value)}`;
+  return `PKR ${new Intl.NumberFormat("en-PK", { maximumFractionDigits: 2 }).format(value)}`;
 };
 
 export const formatNumber = (value: number) => new Intl.NumberFormat("en-PK").format(value);

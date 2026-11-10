@@ -65,11 +65,12 @@ export const demoEvidence: EvidenceItem[] = [
 ];
 
 export const demoData: PortalData = {
+  finances: [...demoProjects.map(p => p.id), null].map(projectId => ({ projectId, raised: demoDonations.filter(d => d.verified && d.projectId === projectId).reduce((s,d) => s+d.amount,0), spent: demoExpenses.filter(e => e.verified && e.projectId === projectId).reduce((s,e) => s+e.amount,0), donations: demoDonations.filter(d => d.verified && d.projectId === projectId).length })),
   projects: demoProjects,
   donations: demoDonations,
   expenses: demoExpenses,
   evidence: demoEvidence,
-  settings: { id: "main", donationUrl: "https://www.instagram.com/koshish/", instagramUrl: "https://www.instagram.com/koshish/", tagline: "Small efforts. Clearly accounted for.", updatedAt: "2026-10-20T12:00:00Z" },
+  settings: { id: "main", donationUrl: "https://www.instagram.com/kosshissh/", instagramUrl: "https://www.instagram.com/kosshissh/", tagline: "Small efforts. Clearly accounted for.", updatedAt: "2026-10-20T12:00:00Z" },
   team: [
     { userId: "demo-admin", email: "admin@koshish.demo", role: "admin", createdAt: "2021-01-01T00:00:00Z" },
     { userId: "demo-editor", email: "editor@koshish.demo", role: "editor", createdAt: "2023-01-01T00:00:00Z" },

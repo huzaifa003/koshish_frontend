@@ -1,10 +1,22 @@
 /** @type {import('tailwindcss').Config} */
-module.exports = {
+import animate from "tailwindcss-animate";
+export default {
   darkMode: ["class"],
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
+        brand: {
+          ink: "hsl(var(--ink) / <alpha-value>)",
+          brick: "hsl(var(--brick) / <alpha-value>)",
+          "brick-dark": "hsl(var(--orange-dark) / <alpha-value>)",
+          paper: "hsl(var(--paper) / <alpha-value>)",
+          sand: "hsl(var(--sand) / <alpha-value>)",
+          slate: "hsl(var(--slate) / <alpha-value>)",
+          line: "hsl(var(--line) / <alpha-value>)",
+          gold: "hsl(var(--gold) / <alpha-value>)",
+          success: "hsl(var(--success) / <alpha-value>)",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -80,5 +92,5 @@ module.exports = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
-}
+  plugins: [animate],
+};
